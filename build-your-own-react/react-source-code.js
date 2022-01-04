@@ -1,104 +1,77 @@
-const element = (
-    <div id="foo">
-        <a>bar</a>
-        <b />
-    </div>
-)
-const container = document.getElementById("root")
-ReactDOM.render(element, container)
+// 经过 createElement 转换后的数据
+// {
+//     "type": "div",
+//     "props": {
+//         "id": "foo",
+//         "__source": {
+//             "fileName": "/src/index.js",
+//             "lineNumber": 271,
+//             "columnNumber": 18
+//         },
+//         "children": [
+//             {
+//                 "type": "a",
+//                 "props": {
+//                     "__source": {
+//                         "fileName": "/src/index.js",
+//                         "lineNumber": 272,
+//                         "columnNumber": 1
+//                     },
+//                     "children": [
+//                         {
+//                             "type": "TEXT_ELEMENT",
+//                             "props": {
+//                                 "nodeValue": "bar",
+//                                 "children": []
+//                             }
+//                         }
+//                     ]
+//                 }
+//             },
+//             {
+//                 "type": "b",
+//                 "props": {
+//                     "__source": {
+//                         "fileName": "/src/index.js",
+//                         "lineNumber": 273,
+//                         "columnNumber": 1
+//                     },
+//                     "children": []
+//                 }
+//             }
+//         ]
+//     }
+// }
 
-// ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
+{/* <div id="foo">
+    <a>bar</a>
+    <b />
+</div> */}
 
-const element = React.createElement(
-    "div",
-    { id: "foo" },
-    React.createElement("a", null, "bar"),
-    React.createElement("b")
-)
-const container = document.getElementById("root")
-ReactDOM.render(element, container)
-
-// ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-// 实现 render、createElement   并发
-
-function createTextElement(text) {
-    return {
-        type: "TEXT_ELEMENT",
-        props: {
-            nodeValue: text,
-            children: [],
-        },
-    }
-}
-
-function createElement(type, props, ...children) {
-    return {
-        type,
-        props: {
-            ...props,
-            children: children.map(child =>
-                typeof child === "object" ? child : createTextElement(child)
-            ),
-        },
-    }
-}
-
-function render(element, container) {
-    const dom = element.type == "TEXT_ELEMENT" ? document.createTextNode("") : document.createElement(element.type)
-
-    Object.keys(element.props).filter(key => key !== "children").forEach(name => dom[name] = element.props[name])
-
-    element.props.children.forEach(child => render(child, dom))
-    // 这个递归调用有问题。
-    // 一旦我们开始渲染，我们不会停止，直到我们渲染了完整的元素树。如果元素树很大，可能会阻塞主线程太久。
-    // 如果浏览器需要做高优先级的事情，比如处理用户输入或保持动画流畅，它必须等到渲染完成。
-
-    container.appendChild(dom)
-}
-
+// 下一个工作单位
 let nextUnitOfWork = null
+// 我们需要将在render函数上接收到的元素与我们提交给 DOM 的最后一个 Fiber 树进行比较。因此，我们需要在完成提交后保存“我们提交给 DOM 的最后一个光纤树”的引用。我们称之为currentRoot。
+// 提交给 DOM 的最后一个光纤树
+let currentRoot = null
+// 正在进行的工作
+let wipRoot = null
+// 想要删除的节点
+let deletions = null
 
-function workLoop(deadline) {
-    let shouldYield = false
-    while (nextUnitOfWork && !shouldYield) {
-        nextUnitOfWork = performUnitOfWork(
-            nextUnitOfWork
-        )
-        shouldYield = deadline.timeRemaining() < 1
-        // 如果回调完成了一个任务并且有另一个任务要开始，它可以调用timeRemaining()以查看是否有足够的时间来完成下一个任务。如果没有，回调可以立即返回，或者寻找其他工作来处理剩余时间。
-    }
-    requestIdleCallback(workLoop)
-    // window.requestIdleCallback()方法插入一个函数，这个函数将在浏览器空闲时期被调用。
-    // 这使开发者能够在主事件循环上执行后台和低优先级工作，而不会影响延迟关键事件，如动画和输入响应。函数一般会按先进先调用的顺序执行
-    // 然而，如果回调函数指定了执行超时时间timeout，则有可能为了在超时前执行函数而打乱执行顺序。
-}
 
-requestIdleCallback(workLoop)
+// 我们需要更新的一种特殊道具是事件监听器，因此如果道具名称以“on”前缀开头，我们将以不同的方式处理它们。
+const isEvent = key => key.startsWith("on")
+const isProperty = key => key !== "children" && !isEvent(key)
+const isNew = (prev, next) => key =>
+    prev[key] !== next[key]
+const isGone = (prev, next) => key => !(key in next)
 
-function performUnitOfWork(nextUnitOfWork) {
-    // TODO
-}
+// 正在工作的 fiber
+let wipFiber = null
+// 当前 hook 的索引
+let hookIndex = null
 
-const Didact = {
-    createElement,
-    render,
-}
-
-/** @jsx Didact.createElement */
-const element = (
-    <div id="foo">
-        <a>bar</a>
-        <b />
-    </div>
-)
-
-const container = document.getElementById("root")
-
-Didact.render(element, container)
-
-// ———————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————————
-// 优化    fiber
-
+// 创建文本模版
 function createTextElement(text) {
     return {
         type: "TEXT_ELEMENT",
@@ -109,6 +82,7 @@ function createTextElement(text) {
     }
 }
 
+// 创建模版
 function createElement(type, props, ...children) {
     return {
         type,
@@ -119,6 +93,22 @@ function createElement(type, props, ...children) {
             ),
         },
     }
+}
+
+// 渲染函数
+// render 函数会先遍历父节点，然后会遍历子节点，如果子节点没有子节点了，就会遍历子节点的兄弟节点，如果兄弟节点没有子节点了，就会遍历父节点，依次往上
+function render(element, container) {
+    // element = div, container = root
+    wipRoot = {
+        dom: container,
+        props: {
+            children: [element],
+        },
+        // 我们还将该alternate属性添加到每个纤维中。该属性是旧纤程的链接，即我们在前一个提交阶段提交给 DOM 的fiber
+        alternate: currentRoot, // 最后一次提交的 fiber
+    }
+    deletions = []
+    nextUnitOfWork = wipRoot
 }
 
 function createDom(fiber) {
@@ -137,12 +127,6 @@ function createDom(fiber) {
     return dom
 }
 
-// 我们需要更新的一种特殊道具是事件监听器，因此如果道具名称以“on”前缀开头，我们将以不同的方式处理它们。
-const isEvent = key => key.startsWith("on")
-const isProperty = key => key !== "children" && !isEvent(key)
-const isNew = (prev, next) => key =>
-    prev[key] !== next[key]
-const isGone = (prev, next) => key => !(key in next)
 function updateDom(dom, prevProps, nextProps) {
     // 如果事件处理程序发生变化，我们将其从节点中删除。
     Object.keys(prevProps)
@@ -228,26 +212,7 @@ function commitDeletion(fiber, domParent) {
     }
 }
 
-// render 函数会先遍历父节点，然后会遍历子节点，如果子节点没有子节点了，就会遍历子节点的兄弟节点，如果兄弟节点没有子节点了，就会遍历父节点，依次往上
-function render(element, container) {
-    wipRoot = {
-        dom: container,
-        props: {
-            children: [element],
-        },
-        alternate: currentRoot,
-        // 我们还将该alternate属性添加到每个纤维中。该属性是旧纤程的链接，即我们在前一个提交阶段提交给 DOM 的fiber
-    }
-    deletions = []
-    nextUnitOfWork = wipRoot
-}
 
-let nextUnitOfWork = null
-let currentRoot = null
-// 我们需要将在render函数上接收到的元素与我们提交给 DOM 的最后一个 Fiber 树进行比较。因此，我们需要在完成提交后保存对“我们提交给 DOM 的最后一个光纤树”的引用。我们称之为currentRoot。
-let wipRoot = null
-// 我们需要一个数组来跟踪我们想要删除的节点。
-let deletions = null
 
 function workLoop(deadline) {
     let shouldYield = false
@@ -269,11 +234,10 @@ requestIdleCallback(workLoop)
 
 // 该函数不仅执行工作而且返回下一个工作单元。
 function performUnitOfWork(fiber) {
-    //功能组件在两个方面有所不同：
-    // 来自函数组件的纤程没有 DOM 节点
-    // 并且孩子们来自运行该功能而不是直接从 props
-    const isFunctionComponent =
-        fiber.type instanceof Function
+    // 函数组件在两个方面有所不同
+    // 1.来自函数组件的 fiber 没有 DOM 节点
+    // 2.并且 children 来自 return 而不是 props
+    const isFunctionComponent = fiber.type instanceof Function
     if (isFunctionComponent) {
         updateFunctionComponent(fiber)
     } else {
@@ -292,44 +256,14 @@ function performUnitOfWork(fiber) {
     }
 }
 
-let wipFiber = null
-let hookIndex = null
-
+// 更新函数组件
 function updateFunctionComponent(fiber) {
     wipFiber = fiber
     hookIndex = 0
+    // 用来支持 hook 在同一组件多次调用
     wipFiber.hooks = []
     const children = [fiber.type(fiber.props)]
     reconcileChildren(fiber, children)
-}
-
-function useState(initial) {
-    const oldHook =
-        wipFiber.alternate &&
-        wipFiber.alternate.hooks &&
-        wipFiber.alternate.hooks[hookIndex]
-    const hook = {
-        state: oldHook ? oldHook.state : initial,
-        queue: [],
-    }
-    const actions = oldHook ? oldHook.queue : []
-    actions.forEach(action => {
-        hook.state = action(hook.state)
-    })
-    const setState = action => {
-        hook.queue.push(action)
-        wipRoot = {
-            dom: currentRoot.dom,
-            props: currentRoot.props,
-            alternate: currentRoot,
-        }
-        nextUnitOfWork = wipRoot
-        deletions = []
-    }
-
-    wipFiber.hooks.push(hook)
-    hookIndex++
-    return [hook.state, setState]
 }
 
 function updateHostComponent(fiber) {
@@ -341,9 +275,20 @@ function updateHostComponent(fiber) {
 
 // 创建新 fiber、对比旧 fiber 和新 fiber
 function reconcileChildren(wipFiber, elements) {
+    // wipRoot = {
+    //     dom: container,
+    //     props: {
+    //         children: [element],
+    //     },
+    //     // 我们还将该alternate属性添加到每个纤维中。该属性是旧纤程的链接，即我们在前一个提交阶段提交给 DOM 的fiber
+    //     alternate: currentRoot, // 最后一次提交的 fiber
+    // }
+    // elements: div
     let index = 0
-    let oldFiber = wipFiber.alternate && wipFiber.alternate.child
-    let prevSibling = null
+    // 旧的 fiber
+    let oldFiber = wipFiber?.alternate?.child // null
+    // 上一个兄弟节点
+    let prevSibling = null 
 
     while (index < elements.length || oldFiber != null) {
         const element = elements[index]
@@ -356,7 +301,7 @@ function reconcileChildren(wipFiber, elements) {
         // 如果类型不同并且有旧光纤，我们需要删除旧节点
         // 这里 React 也使用了键，这可以更好地协调。例如，它检测子元素何时更改元素数组中的位置。
 
-        const sameType = oldFiber && element && element.type == oldFiber.type
+        const sameType = element?.type == oldFiber?.type
 
         //当旧的 Fiber 和元素具有相同的类型时，我们创建一个新的 Fiber，保留来自旧 Fiber 的 DOM 节点和来自元素的 props。
         // 我们还为纤程添加了一个新属性：effectTag. 我们稍后会在提交阶段使用这个属性。
@@ -394,12 +339,41 @@ function reconcileChildren(wipFiber, elements) {
         if (index === 0) {
             wipFiber.child = newFiber
         } else {
-            prevSibling.sibling = newFiber
+            prevSibling.sibling = newFiber // 这行代码似乎没用
         }
 
         prevSibling = newFiber
         index++
     }
+}
+
+function useState(initial) {
+    const oldHook =
+        wipFiber.alternate &&
+        wipFiber.alternate.hooks &&
+        wipFiber.alternate.hooks[hookIndex]
+    const hook = {
+        state: oldHook ? oldHook.state : initial,
+        queue: [],
+    }
+    const actions = oldHook ? oldHook.queue : []
+    actions.forEach(action => {
+        hook.state = action(hook.state)
+    })
+    const setState = action => {
+        hook.queue.push(action)
+        wipRoot = {
+            dom: currentRoot.dom,
+            props: currentRoot.props,
+            alternate: currentRoot,
+        }
+        nextUnitOfWork = wipRoot
+        deletions = []
+    }
+
+    wipFiber.hooks.push(hook)
+    hookIndex++
+    return [hook.state, setState]
 }
 
 const Didact = {
@@ -417,5 +391,6 @@ function Counter() {
         </h1>
     )
 }
+const element = <Counter />
 const container = document.getElementById("root")
 Didact.render(element, container)
